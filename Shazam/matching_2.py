@@ -273,7 +273,7 @@ if __name__ == "__main__":
         save_hash_db(saved_hashes)
 
     # Query (snippet of song1)
-    query_path = "recordings/agarTumSaathrecording.mp3"
+    query_path = "recordings/cleaned_output.mp3"
     try:
         query_sig, sr = librosa.load(query_path, sr=None, mono=True)
     except Exception as e:

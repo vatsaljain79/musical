@@ -49,7 +49,7 @@ def get_constellation_map(magnitude, freq_bins, time_bins, prominence_db=20, max
 
 # ---- Example usage ----
 if __name__ == "__main__":
-    mp3_path = "recordings/c2.mp3"  # replace with your file
+    mp3_path = "recordings/Pachtaogerecording.mp3"  # replace with your file
     signal, sr = librosa.load(mp3_path, sr=None, mono=True)
 
     # Normalize
