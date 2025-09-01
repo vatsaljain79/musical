@@ -6,8 +6,10 @@ from scipy.ndimage import median_filter
 from collections import defaultdict, Counter
 import matplotlib.animation as animation
 from pathlib import Path
-import json
 import os
+import json
+
+
 
 # ---------- STEP 1: STFT ----------
 def stft(signal, sr, fft_size=2048, hop_size=512, window=np.hanning):
@@ -176,6 +178,117 @@ def identify_song(db, query_hashes):
     song_id, offset = best_match
     return song_id, votes
 
+HASH_DB_PATH = "hashes_db.json"
+
+def load_hash_db(path=HASH_DB_PATH):
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        # corrupt file or read error -> treat as empty
+        return {}
+    # convert stored lists back to tuples where appropriate
+    saved = {}
+    for song_id, entries in raw.items():
+        converted = []
+        for item in entries:
+            try:
+                h_list, t = item
+                h_tuple = tuple(h_list)
+                converted.append((h_tuple, float(t)))
+            except Exception:
+                continue
+        if converted:
+            saved[song_id] = converted
+    return saved
+
+def save_hash_db(saved, path=HASH_DB_PATH):
+    # convert tuples to lists for JSON
+    raw = {}
+    for song_id, entries in saved.items():
+        raw_entries = []
+        for (h, t) in entries:
+            raw_entries.append([list(h), float(t)])
+        raw[song_id] = raw_entries
+    # write atomically
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+    os.replace(tmp, path)
+
+
+import os
+from pathlib import Path
+import librosa
+import numpy as np
+
+def recognize_uploaded_song(file_path="/home/vibgyor/BTP/musical/recordings/Vocals_Jeena_Jeena_Trim.mp3"):
+    """
+    file_path: path to uploaded audio file
+    Returns: best match song_id or None
+    """
+    MUSIC_DIR = "/home/vibgyor/BTP/musical/music"
+    db = FingerprintDB()
+    saved_hashes = load_hash_db()
+
+    # Dynamically build songs dict from all .mp3 files in the directory
+    songs = {}
+    for filename in os.listdir(MUSIC_DIR):
+        if filename.lower().endswith(".mp3"):
+            song_name = Path(filename).stem.replace("_", " ")   # e.g. Jeena_Jeena → Jeena Jeena
+            songs[song_name] = os.path.join(MUSIC_DIR, filename)
+
+    # Step 1: Build fingerprint DB
+    for song_id, path in songs.items():
+        if song_id in saved_hashes:
+            db.add_song(song_id, saved_hashes[song_id])
+            print(f"Loaded saved hashes for {song_id} ({len(saved_hashes[song_id])} hashes)")
+            continue
+
+        try:
+            sig, sr = librosa.load(path, sr=None, mono=True)
+        except Exception as e:
+            print(f"Failed to load {path}: {e}")
+            continue
+
+        # Normalize
+        peak = np.max(np.abs(sig)) if sig.size else 0.0
+        if peak > 0:
+            sig = sig / peak
+        else:
+            print(f"Warning: {path} appears silent, skipping.")
+            continue
+
+        # Generate hashes
+        mag, freqs, times = stft(sig, sr)
+        const_map = get_constellation_map(mag, freqs, times)
+        hashes = generate_hashes(const_map)
+
+        db.add_song(song_id, hashes)
+        print(f"Indexed {song_id} with {len(hashes)} hashes")
+
+        # Save hashes for persistence
+        saved_hashes[song_id] = [(tuple(h), float(t)) for h, t in hashes]
+        save_hash_db(saved_hashes)
+
+    # Step 2: Process uploaded file
+    song_path = Path(file_path)
+    query_sig, sr = librosa.load(song_path, sr=None, mono=True)
+    query_sig /= np.max(np.abs(query_sig))
+    mag, freqs, times = stft(query_sig, sr)
+    const_map = get_constellation_map(mag, freqs, times)
+    query_hashes = generate_hashes(const_map)
+    print(f"Indexed {song_path.stem} with {len(query_hashes)} hashes")
+
+    # Step 3: Identify
+    result = identify_song(db, query_hashes)
+    if result:
+        print(f"Best match {result[0]} with {result[1]} votes")
+        return result[0]
+    else:
+        return "No match found"
 
 
 def animate_constellation(signal, sr, constellation, hashes, save_path=None, interval=200):
@@ -245,54 +358,55 @@ def animate_constellation(signal, sr, constellation, hashes, save_path=None, int
 
 # ---------- DEMO ----------
 if __name__ == "__main__":
+    print(recognize_uploaded_song())
     # Database
-    db = FingerprintDB()
+    # db = FingerprintDB()
 
-    # Songs to index (replace with your mp3s)
-    songs = {
-        "song1": "/home/vibgyor/BTP/musical/music/Tujhe_Dekha_Toh.mp3",
-        "song2": "/home/vibgyor/BTP/musical/music/Dheere_Dheere.mp3",
-        "song3": "/home/vibgyor/BTP/musical/music/6_AM.mp3",
-        "song4": "/home/vibgyor/BTP/musical/music/Agar_Tum_Saath_Ho.mp3",
-        "song5": "/home/vibgyor/BTP/musical/music/Desi_Kalakaar.mp3",
-        "song6": "/home/vibgyor/BTP/musical/music/Ho_Gya_Hai_Tujhko.mp3",
-        "song7": "/home/vibgyor/BTP/musical/music/Pachtaoge.mp3",
-        "song8": "/home/vibgyor/BTP/musical/music/Alag_aasman.mp3",
-        "song9": "/home/vibgyor/BTP/musical/music/Jeena_Jeena.mp3",
-        "song10": "/home/vibgyor/BTP/musical/music/Chaar_kadam.mp3",
-        "song11": "/home/vibgyor/BTP/musical/music/Chaand_Baaliyan.mp3",
-    }
+    # # Songs to index (replace with your mp3s)
+    # songs = {
+    #     "song1": "/home/vibgyor/BTP/musical/music/Tujhe_Dekha_Toh.mp3",
+    #     "song2": "/home/vibgyor/BTP/musical/music/Dheere_Dheere.mp3",
+    #     "song3": "/home/vibgyor/BTP/musical/music/6_AM.mp3",
+    #     "song4": "/home/vibgyor/BTP/musical/music/Agar_Tum_Saath_Ho.mp3",
+    #     "song5": "/home/vibgyor/BTP/musical/music/Desi_Kalakaar.mp3",
+    #     "song6": "/home/vibgyor/BTP/musical/music/Ho_Gya_Hai_Tujhko.mp3",
+    #     "song7": "/home/vibgyor/BTP/musical/music/Pachtaoge.mp3",
+    #     "song8": "/home/vibgyor/BTP/musical/music/Alag_aasman.mp3",
+    #     "song9": "/home/vibgyor/BTP/musical/music/Jeena_Jeena.mp3",
+    #     "song10": "/home/vibgyor/BTP/musical/music/Chaar_kadam.mp3",
+    #     "song11": "/home/vibgyor/BTP/musical/music/Chaand_Baaliyan.mp3",
+    # }
 
-    # Index songs
-    for song_id, path in songs.items():
-        sig, sr = librosa.load(path, sr=None, mono=True)
-        sig /= np.max(np.abs(sig))
+    # # Index songs
+    # for song_id, path in songs.items():
+    #     sig, sr = librosa.load(path, sr=None, mono=True)
+    #     sig /= np.max(np.abs(sig))
 
-        mag, freqs, times = stft(sig, sr)
-        # filtered_magnitude = time_frequency_filter(mag,smoothing=(7, 7),threshold_db=6)
+    #     mag, freqs, times = stft(sig, sr)
+    #     # filtered_magnitude = time_frequency_filter(mag,smoothing=(7, 7),threshold_db=6)
 
-        const_map = get_constellation_map(mag, freqs, times)
-        hashes = generate_hashes(const_map)
-        db.add_song(song_id, hashes)
-        print(f"Indexed {song_id} with {len(hashes)} hashes")
+    #     const_map = get_constellation_map(mag, freqs, times)
+    #     hashes = generate_hashes(const_map)
+    #     db.add_song(song_id, hashes)
+    #     print(f"Indexed {song_id} with {len(hashes)} hashes")
 
-    # Query (snippet of song1)
-    song_path = Path("/home/vibgyor/BTP/musical/recordings/Vocals_Jeena_Jeena_Trim.mp3")
-    query_sig, sr = librosa.load(song_path, sr=None, mono=True)
-    query_sig /= np.max(np.abs(query_sig))
+    # # Query (snippet of song1)
+    # song_path = Path("/home/vibgyor/BTP/musical/recordings/Vocals_Jeena_Jeena_Trim.mp3")
+    # query_sig, sr = librosa.load(song_path, sr=None, mono=True)
+    # query_sig /= np.max(np.abs(query_sig))
 
-    mag, freqs, times = stft(query_sig, sr)
-    # filtered_magnitude = time_frequency_filter(mag,smoothing=(7, 7),threshold_db=6)
+    # mag, freqs, times = stft(query_sig, sr)
+    # # filtered_magnitude = time_frequency_filter(mag,smoothing=(7, 7),threshold_db=6)
 
-    const_map = get_constellation_map(mag, freqs, times)
-    query_hashes = generate_hashes(const_map)
-    print(f"Indexed {song_path.stem} with {len(query_hashes)} hashes")
+    # const_map = get_constellation_map(mag, freqs, times)
+    # query_hashes = generate_hashes(const_map)
+    # print(f"Indexed {song_path.stem} with {len(query_hashes)} hashes")
 
-    result = identify_song(db, query_hashes)
-    if result:
-        print(f"Best match: {result[0]} with {result[1]} votes")
-    else:
-        print("No match found")
+    # result = identify_song(db, query_hashes)
+    # if result:
+    #     print(f"Best match: {result[0]} with {result[1]} votes")
+    # else:
+    #     print("No match found")
 
     # Animate (show live)
     # animate_constellation(query_sig, sr, const_map, hashes, save_path=None)

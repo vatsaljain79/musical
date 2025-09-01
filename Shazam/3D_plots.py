@@ -1,51 +1,25 @@
 import numpy as np
+import librosa
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
-import librosa
+from mpl_toolkits.mplot3d import Axes3D
 
 
-def stft(signal, sr, fft_size=2048, hop_size=512, window=np.hanning):
+def stft(signal, sr, fft_size=2048, hop_size=512):
     """
-    Compute Short-Time Fourier Transform (STFT).
+    Compute STFT magnitude with frequency and time bins.
     """
-    win = window(fft_size)
-    num_frames = 1 + (len(signal) - fft_size) // hop_size
-    stft_matrix = np.zeros((fft_size // 2 + 1, num_frames), dtype=np.complex64)
-
-    for i in range(num_frames):
-        start = i * hop_size
-        frame = signal[start:start + fft_size] * win
-        spectrum = np.fft.rfft(frame)
-        stft_matrix[:, i] = spectrum
-
+    stft_matrix = librosa.stft(signal, n_fft=fft_size, hop_length=hop_size, window="hann")
     magnitude = np.abs(stft_matrix)
-    freq_bins = np.fft.rfftfreq(fft_size, 1.0 / sr)
-    time_bins = np.arange(num_frames) * hop_size / sr
+    freq_bins = np.linspace(0, sr / 2, 1 + fft_size // 2)
+    time_bins = np.arange(magnitude.shape[1]) * hop_size / sr
     return magnitude, freq_bins, time_bins
 
 
 def get_constellation_map(magnitude, freq_bins, time_bins,
                           prominence_db=30, max_peaks=5, max_freq=4000):
     """
-    Build a constellation list of peak tuples: (time, freq, prominence_db)
-
-    Parameters
-    ----------
-    magnitude : 2D array
-        Linear magnitude matrix from stft (shape [freq_bins, time_bins])
-    freq_bins, time_bins : arrays
-        Frequency and time arrays returned by stft
-    prominence_db : float
-        Threshold for peak prominence in dB
-    max_peaks : int
-        Pick up to this many peaks per frame (by prominence)
-    max_freq : float
-        Ignore peaks above this frequency (Hz)
-
-    Returns
-    -------
-    constellation : list of tuples
-        (time, freq, prom_db)
+    Build a constellation list of peak tuples: (time, freq, prominence_db).
     """
     constellation = []
     # convert to dB for peak picking
@@ -81,7 +55,6 @@ def get_constellation_map(magnitude, freq_bins, time_bins,
     return constellation
 
 
-# ---- Example usage ----
 if __name__ == "__main__":
     mp3_path = "/home/vibgyor/BTP/musical/recordings/Pachtaogetrim.mp3"  # replace with your file
     signal, sr = librosa.load(mp3_path, sr=None, mono=True)
@@ -106,7 +79,7 @@ if __name__ == "__main__":
     else:
         times, freqs, prom = [], [], []
 
-    # Plot spectrogram
+    # --- 2D spectrogram with constellation overlay ---
     plt.figure(figsize=(10, 6))
     plt.imshow(20 * np.log10(magnitude + 1e-6), origin='lower', aspect='auto',
                extent=[time_bins[0], time_bins[-1], freq_bins[0], freq_bins[-1]])
@@ -114,7 +87,18 @@ if __name__ == "__main__":
     plt.xlabel("Time (s)")
     plt.ylabel("Frequency (Hz)")
     plt.title("STFT Spectrogram with Constellation Map")
-
-    # Overlay constellation peaks
     plt.scatter(times, freqs, c=prom, cmap="viridis", s=10, marker='o')
+    plt.show()
+
+    # --- 3D constellation plot ---
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
+    sc = ax.scatter(times, freqs, prom, c=prom, cmap="plasma", s=15)
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Frequency (Hz)")
+    ax.set_zlabel("Prominence (dB)")
+    ax.set_title("3D Constellation Map")
+    fig.colorbar(sc, label="Prominence (dB)")
+
     plt.show()

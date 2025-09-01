@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
+from scipy.ndimage import median_filter
 import librosa
 
 
@@ -24,42 +25,47 @@ def stft(signal, sr, fft_size=2048, hop_size=512, window=np.hanning):
     return magnitude, freq_bins, time_bins
 
 
+def time_frequency_filter(magnitude, smoothing=(5, 5), threshold_db=6):
+    """
+    Apply time-frequency filtering:
+    1. Estimate noise floor (median over time per frequency bin).
+    2. Build a mask where signal > noise + threshold.
+    3. Smooth mask with median filter.
+    """
+    mag_db = 20 * np.log10(magnitude + 1e-10)
+
+    # Estimate noise floor (per frequency bin)
+    noise_floor = np.median(mag_db, axis=1, keepdims=True)
+
+    # Mask bins significantly above noise
+    mask = mag_db > (noise_floor + threshold_db)
+
+    # Median filter the mask to remove isolated speckles
+    mask = median_filter(mask.astype(float), size=smoothing)
+
+    # Apply mask back to magnitude
+    attenuation = 0
+    filtered_magnitude = magnitude * (mask + attenuation*(1-mask))
+    return filtered_magnitude
+
+
 def get_constellation_map(magnitude, freq_bins, time_bins,
                           prominence_db=30, max_peaks=5, max_freq=4000):
     """
     Build a constellation list of peak tuples: (time, freq, prominence_db)
-
-    Parameters
-    ----------
-    magnitude : 2D array
-        Linear magnitude matrix from stft (shape [freq_bins, time_bins])
-    freq_bins, time_bins : arrays
-        Frequency and time arrays returned by stft
-    prominence_db : float
-        Threshold for peak prominence in dB
-    max_peaks : int
-        Pick up to this many peaks per frame (by prominence)
-    max_freq : float
-        Ignore peaks above this frequency (Hz)
-
-    Returns
-    -------
-    constellation : list of tuples
-        (time, freq, prom_db)
     """
     constellation = []
     # convert to dB for peak picking
-    mag_db = 20 * np.log10(magnitude + 1e-10)
+    mag_db = 20 * np.log10(magnitude + 1e-10) 
 
     for t_idx, frame_db in enumerate(mag_db.T):
-        # find all peaks on dB-scaled frame
         peaks, props = find_peaks(frame_db, prominence=prominence_db)
         if len(peaks) == 0:
             continue
 
         prominences = props.get("prominences", np.zeros_like(peaks))
 
-        # filter peaks by max_freq BEFORE selecting top ones
+        # filter peaks by max_freq
         valid_mask = freq_bins[peaks] <= max_freq
         peaks = peaks[valid_mask]
         prominences = prominences[valid_mask]
@@ -67,7 +73,7 @@ def get_constellation_map(magnitude, freq_bins, time_bins,
         if len(peaks) == 0:
             continue
 
-        # sort remaining peaks by prominence desc and pick top ones
+        # sort and take top ones
         sorted_idx = np.argsort(prominences)[::-1]
         top_idx = sorted_idx[:max_peaks]
 
@@ -83,7 +89,7 @@ def get_constellation_map(magnitude, freq_bins, time_bins,
 
 # ---- Example usage ----
 if __name__ == "__main__":
-    mp3_path = "/home/vibgyor/BTP/musical/recordings/Pachtaogetrim.mp3"  # replace with your file
+    mp3_path = "/home/vibgyor/BTP/musical/recordings/pachtaogerecording.mp3"
     signal, sr = librosa.load(mp3_path, sr=None, mono=True)
 
     # Normalize
@@ -96,8 +102,13 @@ if __name__ == "__main__":
     # STFT
     magnitude, freq_bins, time_bins = stft(signal, sr, fft_size, hop_size)
 
-    # Build constellation map
-    constellation = get_constellation_map(magnitude, freq_bins, time_bins,
+    # ---- Time-frequency filtering ----
+    filtered_magnitude = time_frequency_filter(magnitude,
+                                               smoothing=(7, 7),
+                                               threshold_db=6)
+
+    # Build constellation map (on filtered spectrogram)
+    constellation = get_constellation_map(filtered_magnitude, freq_bins, time_bins,
                                           prominence_db=30, max_peaks=2)
 
     # Unpack constellation into separate lists
@@ -108,13 +119,13 @@ if __name__ == "__main__":
 
     # Plot spectrogram
     plt.figure(figsize=(10, 6))
-    plt.imshow(20 * np.log10(magnitude + 1e-6), origin='lower', aspect='auto',
+    plt.imshow(20 * np.log10(filtered_magnitude + 1e-6), origin='lower', aspect='auto',
                extent=[time_bins[0], time_bins[-1], freq_bins[0], freq_bins[-1]])
     plt.colorbar(label="Magnitude (dB)")
     plt.xlabel("Time (s)")
     plt.ylabel("Frequency (Hz)")
-    plt.title("STFT Spectrogram with Constellation Map")
+    plt.title("Filtered STFT Spectrogram with Constellation Map")
 
     # Overlay constellation peaks
-    plt.scatter(times, freqs, c=prom, cmap="viridis", s=10, marker='o')
+    plt.scatter(times, freqs, c="#ff0f00", cmap="viridis", s=10, marker='o')
     plt.show()
