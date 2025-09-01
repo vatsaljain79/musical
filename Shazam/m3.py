@@ -41,40 +41,61 @@ def stft(signal, sr, fft_size=2048, hop_size=512, window=np.hanning):
 
 # ---------- STEP 2: CONSTELLATION MAP ----------
 def get_constellation_map(magnitude, freq_bins, time_bins,
-                          prominence_db=20, max_peaks=2):
+                          prominence_db=20, max_peaks=2, max_freq=4000):
     """
     Build a constellation list of peak tuples: (time, freq, prominence_db)
-    - magnitude: the linear magnitude matrix from stft (shape [freq_bins, time_bins])
-    - freq_bins, time_bins: arrays returned by stft
-    - prominence_db: threshold for peak prominence in dB (we operate in dB domain)
-    - max_peaks: pick up to this many peaks per frame (by prominence)
-    Returns a list of tuples (t, f, prom_db)
+
+    Parameters
+    ----------
+    magnitude : 2D array
+        Linear magnitude matrix from stft (shape [freq_bins, time_bins])
+    freq_bins, time_bins : arrays
+        Frequency and time arrays returned by stft
+    prominence_db : float
+        Threshold for peak prominence in dB
+    max_peaks : int
+        Pick up to this many peaks per frame (by prominence)
+    max_freq : float
+        Ignore peaks above this frequency (Hz)
+
+    Returns
+    -------
+    constellation : list of tuples
+        (time, freq, prom_db)
     """
     constellation = []
     # convert to dB for peak picking
     mag_db = 20 * np.log10(magnitude + 1e-10)
 
     for t_idx, frame_db in enumerate(mag_db.T):
-        # find peaks on dB-scaled frame
+        # find all peaks on dB-scaled frame
         peaks, props = find_peaks(frame_db, prominence=prominence_db)
         if len(peaks) == 0:
             continue
 
         prominences = props.get("prominences", np.zeros_like(peaks))
-        # sort peaks by prominence desc and pick top ones
+
+        # filter peaks by max_freq BEFORE selecting top ones
+        valid_mask = freq_bins[peaks] <= max_freq
+        peaks = peaks[valid_mask]
+        prominences = prominences[valid_mask]
+
+        if len(peaks) == 0:
+            continue
+
+        # sort remaining peaks by prominence desc and pick top ones
         sorted_idx = np.argsort(prominences)[::-1]
         top_idx = sorted_idx[:max_peaks]
-        amplitude_frame = magnitude[:, t_idx]  # linear amplitude for possible downstream use
 
         for si in top_idx:
             p = peaks[si]
-            prom_db = prominences[si]
             freq = freq_bins[p]
+            prom_db = prominences[si]
             time = float(time_bins[t_idx])
-            # store prominence in dB as the third value (used later in hashing quantization)
             constellation.append((time, float(freq), float(prom_db)))
 
     return constellation
+
 
 
 # ---------- HELPERS (for hashing) ----------
@@ -367,10 +388,14 @@ if __name__ == "__main__":
 
     # Songs to index (replace with your mp3s)
     songs = {
-        "song1": "music/Tujhe_Dekha_Toh.mp3",
-        "song2": "music/Dheere_Dheere.mp3",
-        "song3": "music/6_AM.mp3",
-        "song9": "music/Pachtaoge.mp3",
+        "song1": "/home/vibgyor/BTP/musical/music/Tujhe_Dekha_Toh.mp3",
+        "song2": "/home/vibgyor/BTP/musical/music/Dheere_Dheere.mp3",
+        "song3": "/home/vibgyor/BTP/musical/music/6_AM.mp3",
+        "song4": "/home/vibgyor/BTP/musical/music/Alag_aasman.mp3",
+        "song5": "/home/vibgyor/BTP/musical/music/Jeena_Jeena.mp3",
+        "song6": "/home/vibgyor/BTP/musical/music/Chaar_kadam.mp3",
+        "song7": "/home/vibgyor/BTP/musical/music/Chaand_Baaliyan.mp3",
+        "song9": "/home/vibgyor/BTP/musical/music/Pachtaoge.mp3",
     }
 
     # Index songs
@@ -385,7 +410,7 @@ if __name__ == "__main__":
         print(f"Indexed {song_id} with {len(hashes)} hashes")
 
     # Query (snippet of song1)
-    query_sig, sr = librosa.load("recordings/Pachtaogerecording.mp3", sr=None, mono=True)
+    query_sig, sr = librosa.load("/home/vibgyor/BTP/musical/recordings/chaar_kadam_recording.mp3", sr=None, mono=True)
     query_sig = query_sig / (np.max(np.abs(query_sig)) + 1e-12)
 
     mag, freqs, times = stft(query_sig, sr)
