@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 from collections import defaultdict, Counter
 import matplotlib.animation as animation
+from pathlib import Path
 
 
 
@@ -27,41 +28,98 @@ def stft(signal, sr, fft_size=2048, hop_size=512, window=np.hanning):
 
 # ---------- STEP 2: CONSTELLATION MAP ----------
 def get_constellation_map(magnitude, freq_bins, time_bins,
-                          prominence_db=20, max_peaks=2):
+                          prominence_db=30, max_peaks=5, max_freq=4000):
+    """
+    Build a constellation list of peak tuples: (time, freq, prominence_db)
+
+    Parameters
+    ----------
+    magnitude : 2D array
+        Linear magnitude matrix from stft (shape [freq_bins, time_bins])
+    freq_bins, time_bins : arrays
+        Frequency and time arrays returned by stft
+    prominence_db : float
+        Threshold for peak prominence in dB
+    max_peaks : int
+        Pick up to this many peaks per frame (by prominence)
+    max_freq : float
+        Ignore peaks above this frequency (Hz)
+
+    Returns
+    -------
+    constellation : list of tuples
+        (time, freq, prom_db)
+    """
     constellation = []
+    # convert to dB for peak picking
     mag_db = 20 * np.log10(magnitude + 1e-10)
 
-    for t_idx, frame in enumerate(mag_db.T):
-        peaks, props = find_peaks(frame, prominence=prominence_db)
-        if len(peaks) > 0:
-            prominences = props["prominences"]
-            sorted_idx = np.argsort(prominences)[::-1]
-            top_peaks = peaks[sorted_idx[:max_peaks]]
+    for t_idx, frame_db in enumerate(mag_db.T):
+        # find all peaks on dB-scaled frame
+        peaks, props = find_peaks(frame_db, prominence=prominence_db)
+        if len(peaks) == 0:
+            continue
 
-            for p in top_peaks:
-                freq = freq_bins[p]
-                time = time_bins[t_idx]
-                constellation.append((time, freq))
+        prominences = props.get("prominences", np.zeros_like(peaks))
 
-    return np.array(constellation)
+        # filter peaks by max_freq BEFORE selecting top ones
+        valid_mask = freq_bins[peaks] <= max_freq
+        peaks = peaks[valid_mask]
+        prominences = prominences[valid_mask]
+
+        if len(peaks) == 0:
+            continue
+
+        # sort remaining peaks by prominence desc and pick top ones
+        sorted_idx = np.argsort(prominences)[::-1]
+        top_idx = sorted_idx[:max_peaks]
+
+        for si in top_idx:
+            p = peaks[si]
+            freq = freq_bins[p]
+            prom_db = prominences[si]
+            time = float(time_bins[t_idx])
+            constellation.append((time, float(freq), float(prom_db)))
+
+    return constellation
+
+
 
 
 # ---------- STEP 3: HASHING ----------
-def generate_hashes(constellation, fan_out=5):
+def generate_hashes(constellation, fan_out=8, max_freq=8000):
     """
     Create hashes from constellation map:
     (f1, f2, Δt) → anchor time
+
+    Parameters
+    ----------
+    constellation : list of tuples
+        Each tuple is (time, freq, prom_db)
+    fan_out : int
+        Number of target points to pair with each anchor point
+    max_freq : float
+        Ignore peaks/hashes above this frequency (Hz)
+
+    Returns
+    -------
+    hashes : list of tuples
+        [( (f1, f2, Δt), t1 ), ...]
     """
     hashes = []
     for i in range(len(constellation)):
-        t1, f1 = constellation[i]
+        t1, f1, _ = constellation[i]
+        if f1 > max_freq:
+            continue
         for j in range(1, fan_out + 1):
             if i + j < len(constellation):
-                t2, f2 = constellation[i + j]
+                t2, f2, _ = constellation[i + j]
+                if f2 > max_freq:
+                    continue
                 dt = t2 - t1
-                if 0 < dt < 5.0:  # limit Δt window
+                if 0 < dt < 3.0:  # limit Δt window
                     hash_val = (int(f1), int(f2), round(dt, 2))
-                    hashes.append((hash_val, round(t1,2)))
+                    hashes.append((hash_val, round(t1, 2)))
     return hashes
 
 
@@ -169,12 +227,17 @@ if __name__ == "__main__":
 
     # Songs to index (replace with your mp3s)
     songs = {
-        "song1": "music/Tujhe_Dekha_Toh.mp3",
-        "song2": "music/Dheere_Dheere.mp3",
-        "song3": "music/6_AM.mp3",
-        "song4": "music/Agar_Tum_Saath_Ho.mp3",
-        "song5": "music/Desi_Kalakaar.mp3",
-        "song6": "music/Ho_Gya_Hai_Tujhko.mp3",
+        "song1": "/home/vibgyor/BTP/musical/music/Tujhe_Dekha_Toh.mp3",
+        "song2": "/home/vibgyor/BTP/musical/music/Dheere_Dheere.mp3",
+        "song3": "/home/vibgyor/BTP/musical/music/6_AM.mp3",
+        "song4": "/home/vibgyor/BTP/musical/music/Agar_Tum_Saath_Ho.mp3",
+        "song5": "/home/vibgyor/BTP/musical/music/Desi_Kalakaar.mp3",
+        "song6": "/home/vibgyor/BTP/musical/music/Ho_Gya_Hai_Tujhko.mp3",
+        "song7": "/home/vibgyor/BTP/musical/music/Pachtaoge.mp3",
+        "song8": "/home/vibgyor/BTP/musical/music/Alag_aasman.mp3",
+        "song9": "/home/vibgyor/BTP/musical/music/Jeena_Jeena.mp3",
+        "song10": "/home/vibgyor/BTP/musical/music/Chaar_kadam.mp3",
+        "song11": "/home/vibgyor/BTP/musical/music/Chaand_Baaliyan.mp3",
         # "song7": "recordings/trim_dheere.mp3"
     }
 
@@ -190,13 +253,14 @@ if __name__ == "__main__":
         print(f"Indexed {song_id} with {len(hashes)} hashes")
 
     # Query (snippet of song1)
-    query_sig, sr = librosa.load("recordings/trim_dheere.mp3", sr=None, mono=True)
+    song_path = Path("/home/vibgyor/BTP/musical/recordings/Pachtaogetrim.mp3")
+    query_sig, sr = librosa.load(song_path, sr=None, mono=True)
     query_sig /= np.max(np.abs(query_sig))
 
     mag, freqs, times = stft(query_sig, sr)
     const_map = get_constellation_map(mag, freqs, times)
     query_hashes = generate_hashes(const_map)
-    print(f"Indexed query song with {len(query_hashes)} hashes")
+    print(f"Indexed {song_path.stem} with {len(query_hashes)} hashes")
 
     result = identify_song(db, query_hashes)
     if result:
